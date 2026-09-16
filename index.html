@@ -108,7 +108,8 @@ header h1 { font-size: 16px; font-weight: 600; color: #f1f5f9; }
   border-radius: 6px; color: #94a3b8; font-size: 12px; font-weight: 600;
   cursor: pointer; transition: all .15s;
 }
-.login-btn:hover { background: #263a57; color: #cbd5e1; }
+.login-btn:hover:not(:disabled) { background: #263a57; color: #cbd5e1; }
+.login-btn:disabled { opacity: .35; cursor: not-allowed; }
 
 .login-note { font-size: 10px; color: #334155; line-height: 1.5; }
 
@@ -223,7 +224,7 @@ header h1 { font-size: 16px; font-weight: 600; color: #f1f5f9; }
     <path d="m22 7-8.97 5.7a1.94 1.94 0 0 1-2.06 0L2 7"/>
   </svg>
   <h1>Temp Mail</h1>
-  <div class="badge">mail.tm — <b>постоянные аккаунты</b></div>
+  <div class="badge">Guerrilla Mail — <b>живой инбокс</b></div>
 </header>
 
 <div class="layout">
@@ -235,20 +236,14 @@ header h1 { font-size: 16px; font-weight: 600; color: #f1f5f9; }
       <div class="lbl">Email <span style="color:#334155;font-weight:400;text-transform:none;font-size:10px">— нажми чтобы скопировать</span></div>
       <div class="val dim" id="el" onclick="clickCopy(this, () => email)"></div>
     </div>
-    <div>
-      <div class="lbl">Пароль <span style="color:#334155;font-weight:400;text-transform:none;font-size:10px">— нажми чтобы скопировать</span></div>
-      <div class="val dim" id="pl" onclick="clickCopy(this, () => password)"></div>
-    </div>
 
     <button class="copy-all-btn" id="copy-all" onclick="copyAll(this)" disabled>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
         <rect width="14" height="14" x="8" y="8" rx="2" ry="2"/>
         <path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>
       </svg>
-      Скопировать логин + пароль (в таблицу)
+      Скопировать email
     </button>
-
-    <div class="hint">Кнопка выше копирует оба поля через Tab — при вставке в таблицу расходятся по ячейкам.</div>
 
     <button class="new-btn" id="new-btn" onclick="createNew()" disabled>
       <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
@@ -257,28 +252,22 @@ header h1 { font-size: 16px; font-weight: 600; color: #f1f5f9; }
         <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16"/>
         <path d="M8 16H3v5"/>
       </svg>
-      Новый аккаунт
+      Новый адрес
     </button>
 
-    <div class="div">войти в существующий</div>
+    <div class="div">свой адрес</div>
 
     <div class="login-box">
       <div>
-        <div class="lbl">Email</div>
-        <input class="inp" id="li-email" type="email" placeholder="user@domain.com"
-          onkeydown="if(event.key==='Enter') document.getElementById('li-pass').focus()" />
+        <div class="lbl">Имя ящика <span style="color:#334155;font-weight:400;text-transform:none;font-size:10px">— без @домен</span></div>
+        <input class="inp" id="li-name" type="text" placeholder="mycustomname"
+          onkeydown="if(event.key==='Enter') setCustomName()" />
       </div>
-      <div>
-        <div class="lbl">Пароль</div>
-        <input class="inp" id="li-pass" type="password" placeholder="••••••••"
-          onkeydown="if(event.key==='Enter') loginExisting()" />
-      </div>
-      <button class="login-btn" onclick="loginExisting()">Войти и получить письма</button>
+      <button class="login-btn" id="li-btn" onclick="setCustomName()">Установить это имя</button>
     </div>
 
     <div class="login-note">
-      Через 2 недели — вводишь тот же email и пароль, получаешь новые коды.<br>
-      Аккаунты mail.tm не удаляются автоматически.
+      Сессия и письма держатся, пока открыта вкладка и идёт опрос почты — этот адрес переживёт перезагрузку страницы (сохраняется в браузере), но неактивные ящики стираются провайдером примерно через час.
     </div>
 
     <div class="err-box" id="err"></div>
@@ -310,13 +299,10 @@ header h1 { font-size: 16px; font-weight: 600; color: #f1f5f9; }
 </div>
 
 <script>
-const APIS = ['https://api.mail.tm', 'https://api.mail.gw'];
-let apiIdx = 0;
-let token = '', email = '', password = '';
-let pollTimer = null, known = new Set();
+const API = 'https://api.guerrillamail.com/ajax.php';
+let sidToken = '', email = '';
+let pollTimer = null, known = new Set(), lastSeq = 0;
 let pollErrors = 0;
-
-function getAPI() { return APIS[apiIdx]; }
 
 /* ── utils ─────────────────────────────────── */
 function esc(s) {
@@ -325,6 +311,9 @@ function esc(s) {
 function stripHtml(h) {
   try { return new DOMParser().parseFromString(h,'text/html').body.textContent || ''; }
   catch(_) { return h.replace(/<[^>]*>/g,''); }
+}
+function decodeEntities(s) {
+  const t=document.createElement('textarea'); t.innerHTML=s; return t.value;
 }
 function findCode(t) {
   if (!t) return null;
@@ -340,12 +329,6 @@ function ago(iso) {
   if(s<86400) return Math.floor(s/3600)+' ч. назад';
   return Math.floor(s/86400)+' дн. назад';
 }
-function genPass() {
-  const U='BCDFGHJKLMNPQRSTVWXYZ', l='bcdfghjklmnpqrstvwxyz', d='23456789', s='!@#$%';
-  const pick = c => c[Math.random()*c.length|0];
-  return pick(U)+pick(l)+pick(l)+pick(d)+pick(d)+pick(s)
-        +pick(l)+pick(d)+pick(l)+pick(U)+pick(d)+pick(s);
-}
 function rand(n){return Math.random().toString(36).slice(2,2+n).padEnd(n,'x');}
 
 function setDot(s){document.getElementById('dot').className='dot'+(s==='on'?' on':s==='err'?' err':'');}
@@ -354,10 +337,10 @@ function showErr(t){const b=document.getElementById('err');b.textContent=t;b.cla
 function clearErr(){document.getElementById('err').className='err-box';}
 
 function saveSession(){
-  try{localStorage.setItem('tm_sess',JSON.stringify({email,password}));}catch(_){}
+  try{localStorage.setItem('tm_sess',JSON.stringify({sidToken,email}));}catch(_){}
 }
 function loadSession(){
-  try{const d=JSON.parse(localStorage.getItem('tm_sess'));return d&&d.email?d:null;}catch(_){return null;}
+  try{const d=JSON.parse(localStorage.getItem('tm_sess'));return d&&d.sidToken?d:null;}catch(_){return null;}
 }
 function clearSession(){
   try{localStorage.removeItem('tm_sess');}catch(_){}
@@ -382,7 +365,7 @@ function clickCopy(el, getter) {
 
 async function copyAll(btn) {
   if (!email) return;
-  await copyText(email + '\t' + password);
+  await copyText(email);
   btn.classList.add('flash-btn');
   setTimeout(() => btn.classList.remove('flash-btn'), 500);
 }
@@ -394,30 +377,22 @@ function clickCode(el, code) {
 }
 
 /* ── set account UI ────────────────────────── */
-function setAccount(e, p, t) {
-  email=e; password=p; token=t;
+function setAccount(addr, sid) {
+  email=addr; sidToken=sid;
   const el=document.getElementById('el');
-  el.textContent=e; el.className='val ready';
+  el.textContent=addr; el.className='val ready';
   el.onclick = () => clickCopy(el, ()=>email);
-  const pl=document.getElementById('pl');
-  pl.textContent=p; pl.className='val ready';
-  pl.onclick = () => clickCopy(pl, ()=>password);
   document.getElementById('copy-all').disabled=false;
   document.getElementById('new-btn').disabled=false;
   saveSession();
 }
 
-/* ── fetch with retry + fallback API ────────── */
-async function mtFetch(path, opts={}, retries=2) {
+/* ── fetch with retry ─────────────────────── */
+async function gmFetch(params, retries=2) {
+  const qs = new URLSearchParams(params).toString();
   for (let attempt = 0; attempt <= retries; attempt++) {
     try {
-      const r = await fetch(getAPI()+path, {
-        headers: {
-          'Content-Type':'application/json',
-          ...(token?{'Authorization':'Bearer '+token}:{})
-        },
-        ...opts
-      });
+      const r = await fetch(`${API}?${qs}`, { method: 'GET' });
       if (r.status === 429) {
         const wait = Math.min(2000 * (attempt+1), 8000);
         setSt('Лимит запросов, ждём '+Math.ceil(wait/1000)+'с…');
@@ -428,21 +403,17 @@ async function mtFetch(path, opts={}, retries=2) {
         await new Promise(ok=>setTimeout(ok, 1500*(attempt+1)));
         continue;
       }
-      if (!r.ok) {
-        const txt=await r.text().catch(()=>'');
-        throw new Error(`HTTP ${r.status}: ${txt.slice(0,100)}`);
+      if (!r.ok) throw new Error(`HTTP ${r.status}`);
+      const data = await r.json();
+      if (data.auth && data.auth.success === false) {
+        throw new Error('AUTH_FAILED');
       }
-      return r.json();
+      return data;
     } catch(e) {
-      if (e.message.startsWith('HTTP ')) throw e;
+      if (e.message === 'AUTH_FAILED') throw e;
       if (attempt < retries) {
         await new Promise(ok=>setTimeout(ok, 1500*(attempt+1)));
         continue;
-      }
-      if (apiIdx < APIS.length-1) {
-        apiIdx++;
-        setSt('Переключаемся на резервный API…');
-        return mtFetch(path, opts, retries);
       }
       throw e;
     }
@@ -451,23 +422,15 @@ async function mtFetch(path, opts={}, retries=2) {
 
 /* ── create new account ────────────────────── */
 async function createNew(autoRetry=0) {
-  stopPoll(); known.clear(); clearErr();
+  stopPoll(); known.clear(); lastSeq=0; clearErr();
   document.getElementById('new-btn').disabled=true;
   document.getElementById('copy-all').disabled=true;
   const el=document.getElementById('el'); el.textContent='Создаём…'; el.className='val dim'; el.onclick=null;
-  const pl=document.getElementById('pl'); pl.textContent='—'; pl.className='val dim'; pl.onclick=null;
-  resetInbox(); setSt('Получаем домен…');
+  resetInbox(); setSt('Создаём адрес…');
   try {
-    const dd = await mtFetch('/domains?page=1');
-    const members = dd['hydra:member']||[];
-    if(!members.length) throw new Error('Нет доступных доменов');
-    const domain = members[0].domain;
-    const pass=genPass(), addr=`${rand(10)}@${domain}`;
-    setSt('Создаём аккаунт…');
-    await mtFetch('/accounts',{method:'POST',body:JSON.stringify({address:addr,password:pass})});
-    setSt('Получаем токен…');
-    const td=await mtFetch('/token',{method:'POST',body:JSON.stringify({address:addr,password:pass})});
-    setAccount(addr,pass,td.token);
+    const d = await gmFetch({ f: 'get_email_address', ip: '127.0.0.1', agent: navigator.userAgent });
+    if (!d.email_addr) throw new Error('Пустой ответ от сервера');
+    setAccount(d.email_addr, d.sid_token);
     pollErrors=0;
     clearErr(); setSt('Ожидаем письма…','on'); startPoll();
   } catch(e) {
@@ -477,29 +440,32 @@ async function createNew(autoRetry=0) {
       setTimeout(()=>createNew(autoRetry+1), wait);
       return;
     }
-    showErr('Не удалось создать аккаунт: '+e.message+'. Нажмите «Новый аккаунт» для повтора.');
+    showErr('Не удалось создать адрес: '+e.message+'. Нажмите «Новый адрес» для повтора.');
     setSt('Ошибка','err');
     document.getElementById('new-btn').disabled=false;
     document.getElementById('el').textContent='—';
   }
 }
 
-/* ── login existing ────────────────────────── */
-async function loginExisting() {
-  const e=document.getElementById('li-email').value.trim();
-  const p=document.getElementById('li-pass').value.trim();
-  if(!e||!p){showErr('Введите email и пароль');return;}
-  stopPoll(); known.clear(); clearErr(); resetInbox(); setSt('Входим…');
+/* ── set custom local-part ─────────────────── */
+async function setCustomName() {
+  const name = document.getElementById('li-name').value.trim().toLowerCase().replace(/[^a-z0-9._-]/g,'');
+  if (!name) { showErr('Введите имя ящика (латиница, цифры)'); return; }
+  if (!sidToken) { showErr('Сначала дождитесь инициализации адреса'); return; }
+  clearErr();
+  const btn=document.getElementById('li-btn'); btn.disabled=true; btn.textContent='Меняем…';
   try {
-    const td=await mtFetch('/token',{method:'POST',body:JSON.stringify({address:e,password:p})});
-    setAccount(e,p,td.token);
-    document.getElementById('li-email').value='';
-    document.getElementById('li-pass').value='';
-    pollErrors=0;
-    clearErr(); setSt('Ожидаем письма…','on'); startPoll();
-  } catch(e2) {
-    showErr('Не удалось войти: '+e2.message);
-    setSt('Ошибка входа','err');
+    const d = await gmFetch({ f: 'set_email_user', email_user: name, lang: 'ru', sid_token: sidToken });
+    if (d.alias_error) throw new Error(d.alias_error);
+    if (!d.email_addr) throw new Error('Не удалось установить имя');
+    stopPoll(); known.clear(); lastSeq=0; resetInbox();
+    setAccount(d.email_addr, d.sid_token || sidToken);
+    document.getElementById('li-name').value='';
+    setSt('Ожидаем письма…','on'); startPoll();
+  } catch(e) {
+    showErr('Не удалось изменить адрес: '+e.message);
+  } finally {
+    btn.disabled=false; btn.textContent='Установить это имя';
   }
 }
 
@@ -507,12 +473,13 @@ async function loginExisting() {
 async function restoreSession() {
   const sess = loadSession();
   if (!sess) return false;
-  setSt('Восстанавливаем сессию…');
+  setSt('Восстанавливаем адрес…');
   try {
-    const td=await mtFetch('/token',{method:'POST',body:JSON.stringify({address:sess.email,password:sess.password})});
-    setAccount(sess.email, sess.password, td.token);
+    const d = await gmFetch({ f: 'get_email_address', sid_token: sess.sidToken });
+    if (!d.email_addr) throw new Error('no address');
+    setAccount(d.email_addr, d.sid_token);
     pollErrors=0;
-    clearErr(); setSt('Сессия восстановлена','on'); startPoll();
+    clearErr(); setSt('Адрес восстановлен','on'); startPoll();
     return true;
   } catch(_) {
     clearSession();
@@ -528,76 +495,59 @@ function startPoll(){
 }
 function schedulePoll(){
   if(pollTimer) clearTimeout(pollTimer);
-  const delay = pollErrors > 0 ? Math.min(5000 * Math.pow(2, pollErrors-1), 60000) : 5000;
+  const delay = pollErrors > 0 ? Math.min(4000 * Math.pow(2, pollErrors-1), 60000) : 4000;
   pollTimer=setTimeout(()=>{doPoll();schedulePoll();}, delay);
 }
 function stopPoll(){if(pollTimer){clearTimeout(pollTimer);pollTimer=null;}}
 
 async function doPoll() {
-  if(!token) return;
+  if(!sidToken) return;
   try {
-    const d=await mtFetch('/messages?page=1');
-    const msgs=d['hydra:member']||[];
-    document.getElementById('cnt').textContent=d['hydra:totalItems']||msgs.length||'0';
-    for(const m of msgs){
-      if(!known.has(m.id)){known.add(m.id);fetchMsg(m);}
+    const d = await gmFetch({ f: 'check_email', seq: lastSeq, sid_token: sidToken });
+    const msgs = d.list || [];
+    for (const m of msgs) {
+      if (m.mail_id) lastSeq = Math.max(lastSeq, Number(m.mail_id));
+      if (!known.has(m.mail_id)) {
+        known.add(m.mail_id);
+        renderCard(m, known.size>1);
+      }
     }
+    document.getElementById('cnt').textContent = known.size;
     pollErrors=0;
     setSt('Обновлено '+new Date().toLocaleTimeString('ru'),'on');
     clearErr();
   } catch(e) {
     pollErrors++;
-    if(e.message.includes('401')&&email&&password){
-      try{
-        token='';
-        const td=await mtFetch('/token',{method:'POST',body:JSON.stringify({address:email,password})});
-        token=td.token;
-        pollErrors=0;
-        setSt('Сессия обновлена','on');
-        saveSession();
-      } catch(_){
-        setSt('Сессия истекла — войдите снова','err');
-        showErr('Токен истёк. Введите email+пароль ещё раз.');
-        stopPoll();
-      }
-    } else {
-      const nextIn = Math.min(5000 * Math.pow(2, pollErrors-1), 60000);
-      setSt('Ошибка, повтор через '+Math.ceil(nextIn/1000)+'с…','err');
-    }
+    const nextIn = Math.min(4000 * Math.pow(2, pollErrors-1), 60000);
+    setSt('Ошибка, повтор через '+Math.ceil(nextIn/1000)+'с…','err');
   }
-}
-
-async function fetchMsg(m) {
-  let text=m.intro||'';
-  try{
-    const full=await mtFetch('/messages/'+m.id);
-    text=full.text||(full.html?stripHtml((full.html||[])[0]||''):m.intro||'');
-  }catch(_){}
-  renderCard({id:m.id,from:m.from?.address||'',subject:m.subject||'',text,date:m.createdAt},known.size>1);
 }
 
 /* ── render ────────────────────────────────── */
 function renderCard(m, isNew) {
-  if(document.getElementById('c'+m.id)) return;
-  const code=findCode(m.text)||findCode(m.subject);
-  const short=(m.text||'').trim().slice(0,400);
-  const more=(m.text||'').length>300;
+  if(document.getElementById('c'+m.mail_id)) return;
+  const rawText = m.mail_body ? stripHtml(m.mail_body) : decodeEntities(m.mail_excerpt||'');
+  const subject = decodeEntities(m.mail_subject||'');
+  const from = decodeEntities(m.mail_from||'');
+  const code=findCode(rawText)||findCode(subject);
+  const short=rawText.trim().slice(0,400);
+  const more=rawText.length>300;
 
   const el=document.createElement('div');
-  el.className='card'+(isNew?' new':''); el.id='c'+m.id;
+  el.className='card'+(isNew?' new':''); el.id='c'+m.mail_id;
 
   el.innerHTML=`
-    <div class="c-from">От: ${esc(m.from)}</div>
-    <div class="c-subj">${esc(m.subject||'(без темы)')}</div>
+    <div class="c-from">От: ${esc(from)}</div>
+    <div class="c-subj">${esc(subject||'(без темы)')}</div>
     ${code?`
-    <div class="code-wrap" id="cw${esc(m.id)}" onclick="clickCode(this,'${esc(code)}')">
+    <div class="code-wrap" id="cw${esc(m.mail_id)}" onclick="clickCode(this,'${esc(code)}')">
       <span class="code-val">${esc(code)}</span>
       <span class="code-hint">нажми чтобы скопировать</span>
     </div>`:''}
-    <div class="c-text" id="t${esc(m.id)}">${esc(short)||'<i style="color:#334155">нет текста</i>'}</div>
+    <div class="c-text" id="t${esc(m.mail_id)}">${esc(short)||'<i style="color:#334155">нет текста</i>'}</div>
     <div class="c-foot">
-      <span class="c-time">${ago(m.date)}</span>
-      ${more?`<button class="exp-btn" onclick="expand('${esc(m.id)}',\`${encodeURIComponent(m.text)}\`)">Показать всё</button>`:''}
+      <span class="c-time">только что</span>
+      ${more?`<button class="exp-btn" onclick="expand('${esc(m.mail_id)}',\`${encodeURIComponent(rawText)}\`)">Показать всё</button>`:''}
     </div>`;
 
   const empty=document.getElementById('empty');
