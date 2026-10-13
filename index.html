@@ -335,10 +335,10 @@ header h1 { font-size: 16px; font-weight: 600; color: #f1f5f9; }
 const API = 'https://flat-rice-5b1c.armdi19.workers.dev';
 const MERCURE = 'https://mercure.mail.tm/.well-known/mercure';
 const SESSION_KEY = 'tm_sess';
-const POOL_SIZE = 1;
-const POOL_TRACKER = false;
-const REFILL_MS = 12000;
-const REFILL_SLOW_MS = 60000;
+const POOL_SIZE = 50;
+const POOL_TRACKER = true;
+const REFILL_MS = 8000;
+const REFILL_SLOW_MS = 20000;
 let token = '', email = '', password = '';
 let pollTimer = null, known = new Set();
 let pollErrors = 0;
